@@ -1,6 +1,4 @@
-import cats.effect.IO
-
-trait ChannelGen {
-  def makeUChan: IO[UChan]
-  def makeTChan[T]: IO[TChan[T]]
+trait ChannelGen[F[_]] {
+  def makeUChan: F[UChan[F]]
+  def makeTChan[T]: F[TChan[F, T]]
 }

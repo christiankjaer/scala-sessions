@@ -1,26 +1,27 @@
 import cats.effect.std.Queue
 import cats.effect.IO
+import cats.effect.Concurrent
 import cats.effect.implicits.*
 import cats.syntax.all.*
 
 object QueueChan {
-  def queueChanGen: ChannelGen = new ChannelGen {
-    override def makeUChan: IO[UChan] =
+  def queueChanGen[F[_]: Concurrent]: ChannelGen[F] = new ChannelGen[F] {
+    override def makeUChan: F[UChan[F]] =
       Queue
-        .bounded[IO, Any](1)
+        .bounded[F, Any](1)
         .map(q =>
-          new UChan {
-            override def read[T]: IO[T] = q.take.map(_.asInstanceOf[T])
-            override def write[T](a: T): IO[Unit] = q.offer(a)
+          new UChan[F] {
+            override def read[T]: F[T] = q.take.map(_.asInstanceOf[T])
+            override def write[T](a: T): F[Unit] = q.offer(a)
           }
         )
-    override def makeTChan[T]: IO[TChan[T]] =
+    override def makeTChan[T]: F[TChan[F, T]] =
       Queue
-        .bounded[IO, T](1)
+        .bounded[F, T](1)
         .map(q =>
-          new TChan[T] {
-            override def read: IO[T] = q.take
-            override def write(a: T): IO[Unit] = q.offer(a)
+          new TChan[F, T] {
+            override def read: F[T] = q.take
+            override def write(a: T): F[Unit] = q.offer(a)
           }
         )
 

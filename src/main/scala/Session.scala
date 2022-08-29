@@ -1,4 +1,5 @@
-import cats.effect.IO
+import cats.{Applicative, Monad}
+import cats.syntax.all.*
 
 sealed trait Nat
 
@@ -25,23 +26,23 @@ type Dual[X] = X match {
   case Eps       => Eps
 }
 
-trait TChan[A] {
-  def write(a: A): IO[Unit]
-  def read: IO[A]
+trait TChan[F[_], A] {
+  def write(a: A): F[Unit]
+  def read: F[A]
 }
 
-trait UChan {
-  def write[A](a: A): IO[Unit]
-  def read[A]: IO[A]
+trait UChan[F[_]] {
+  def write[A](a: A): F[Unit]
+  def read[A]: F[A]
 }
 
 sealed trait Cap[E, R]
 
-final case class Session[S1, S2, A](s: UChan => IO[A]) extends AnyVal {
-  def apply(c: UChan): IO[A] = s(c)
+final case class Session[F[_], S1, S2, A](s: UChan[F] => F[A]) extends AnyVal {
+  def apply(c: UChan[F]): F[A] = s(c)
   def flatMapI[B, S3](
-      f: A => Session[S2, S3, B]
-  ): Session[S1, S3, B] =
+      f: A => Session[F, S2, S3, B]
+  )(using Monad[F]): Session[F, S1, S3, B] =
     Session { c =>
       for {
         a <- s(c)
@@ -49,38 +50,48 @@ final case class Session[S1, S2, A](s: UChan => IO[A]) extends AnyVal {
       } yield res
     }
 
-  def >>>[B, S3](t: => Session[S2, S3, B]): Session[S1, S3, B] =
+  def >>>[B, S3](t: => Session[F, S2, S3, B])(using
+      Monad[F]
+  ): Session[F, S1, S3, B] =
     flatMapI(_ => t)
 }
 
-object Session {
-  def pure[S, A](a: A): Session[S, S, A] =
-    Session(_ => IO.pure(a))
+trait SessionDsl[F[_]: Monad] {
+
+  type ECtx = EmptyTuple
+  type SCtx[T] = T *: EmptyTuple
+
+  type Sess[S1, S2, A] = Session[F, S1, S2, A]
+
+  def pure[S, A](a: A): Sess[S, S, A] =
+    Session(_ => a.pure)
 
   def send[Ctx <: Tuple, R, A](
       a: A
-  ): Session[Cap[Ctx, A :!: R], Cap[Ctx, R], Unit] =
+  ): Sess[Cap[Ctx, A :!: R], Cap[Ctx, R], Unit] =
     Session(_.write(a))
 
-  def recv[Ctx <: Tuple, R, A]: Session[Cap[Ctx, A :?: R], Cap[Ctx, R], A] =
+  def recv[Ctx <: Tuple, R, A]: Sess[Cap[Ctx, A :?: R], Cap[Ctx, R], A] =
     Session(_.read)
 
-  def close[Ctx <: Tuple]: Session[Cap[Ctx, Eps], Unit, Unit] =
-    Session(_ => IO.unit)
+  def close[Ctx <: Tuple]: Sess[Cap[Ctx, Eps], Unit, Unit] =
+    Session(_ => ().pure)
 
-  def lift[S, A](fa: IO[A]): Session[S, S, A] =
+  def lift[S, A](fa: F[A]): Sess[S, S, A] =
     Session(_ => fa)
 
-  def sel1[Ctx <: Tuple, R, S]: Session[Cap[Ctx, R :+: S], Cap[Ctx, R], Unit] =
+  def sel1[Ctx <: Tuple, R, S]
+      : Sess[Cap[Ctx, R :+: S], Cap[Ctx, R], Unit] =
     Session(_.write(true))
 
-  def sel2[Ctx <: Tuple, R, S]: Session[Cap[Ctx, R :+: S], Cap[Ctx, S], Unit] =
+  def sel2[Ctx <: Tuple, R, S]
+      : Sess[Cap[Ctx, R :+: S], Cap[Ctx, S], Unit] =
     Session(_.write(false))
 
   def offer[Ctx <: Tuple, R, S, U, A](
-      s1: Session[Cap[Ctx, R], U, A],
-      s2: Session[Cap[Ctx, S], U, A]
-  ): Session[Cap[Ctx, R :&: S], U, A] =
+      s1: Sess[Cap[Ctx, R], U, A],
+      s2: Sess[Cap[Ctx, S], U, A]
+  ): Sess[Cap[Ctx, R :&: S], U, A] =
     Session(c =>
       for {
         b <- c.read[Boolean]
@@ -89,15 +100,15 @@ object Session {
     )
 
   def enter[Ctx <: Tuple, R]
-      : Session[Cap[Ctx, Rec[R]], Cap[R *: Ctx, R], Unit] =
-    Session(_ => IO.unit)
+      : Sess[Cap[Ctx, Rec[R]], Cap[R *: Ctx, R], Unit] =
+    Session(_ => ().pure)
 
   def zero[Ctx <: Tuple, R]
-      : Session[Cap[R *: Ctx, Var[Nat.Z]], Cap[R *: Ctx, R], Unit] =
-    Session(_ => IO.unit)
+      : Sess[Cap[R *: Ctx, Var[Nat.Z]], Cap[R *: Ctx, R], Unit] =
+    Session(_ => ().pure)
 
   def suc[Ctx <: Tuple, N <: Nat, R]
-      : Session[Cap[R *: Ctx, Var[Nat.S[N]]], Cap[Ctx, Var[N]], Unit] =
-    Session(_ => IO.unit)
+      : Sess[Cap[R *: Ctx, Var[Nat.S[N]]], Cap[Ctx, Var[N]], Unit] =
+    Session(_ => ().pure)
 
 }
