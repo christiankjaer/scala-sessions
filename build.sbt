@@ -1,4 +1,4 @@
-val scala3Version = "3.2.0-RC4"
+val scala3Version = "3.2.0"
 
 val ceVersion = "3.3.14"
 

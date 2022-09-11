@@ -6,37 +6,56 @@ object Server extends SessionDsl[IO] {
 
   type PingPong = Int :!: Int :?: Eps
 
-  val party1: Sess[Cap[ECtx, PingPong], Unit, Unit] =
-    send(42) >>> recv >>> close
+  def party1[Tag, Ctx <: CTypes](
+      c: Channel[IO, Tag]
+  ): Sess[Cap[Tag, ECtx, PingPong] *: Ctx, Ctx, Int] =
+    send(c, 42) >>> recv(c).flatMapI(i => close(c) >>> lift(IO.pure(i)))
 
-  val party2: Sess[Cap[ECtx, Dual[PingPong]], Unit, Unit] =
-    recv.flatMapI(send(_) >>> close)
+  def party2[Tag, Ctx <: CTypes](
+      c: Channel[IO, Tag]
+  ): Sess[Cap[Tag, ECtx, Dual[PingPong]] *: Ctx, Ctx, Unit] =
+    recv(c).flatMapI(send(c, _) >>> close(c))
 
   type ServerProtocol = Eps :&: (String :?: Var[Nat.Z])
 
-  val server: Sess[Cap[ECtx, Rec[ServerProtocol]], Unit, Unit] = {
+  def server[Tag, Ctx <: CTypes](
+      c: Channel[IO, Tag]
+  ): Sess[Cap[Tag, ECtx, Rec[ServerProtocol]] *: Ctx, Ctx, Unit] = {
 
-    def loop(): Sess[Cap[SCtx[ServerProtocol], ServerProtocol], Unit, Unit] =
-      offer(
-        close,
-        recv.flatMapI(s => lift(IO.println(s)) >>> zero >>> loop())
+    def loop(): Sess[
+      Cap[Tag, SCtx[ServerProtocol], ServerProtocol] *: Ctx,
+      Ctx,
+      Unit
+    ] =
+      offer(c)(
+        close(c),
+        recv(c).flatMapI(s => lift(IO.println(s)) >>> zero(c) >>> loop())
       )
-    enter >>> loop()
+
+    enter(c) >>> loop()
   }
 
-  val client: Sess[Cap[ECtx, Dual[Rec[ServerProtocol]]], Unit, Unit] = {
+  def client[Tag, Ctx <: CTypes](
+      c: Channel[IO, Tag]
+  ): Sess[Cap[Tag, ECtx, Rec[Dual[ServerProtocol]]] *: Ctx, Ctx, Unit] = {
 
     def loop(
         i: Int
-    ): Sess[Cap[SCtx[Dual[ServerProtocol]], Dual[ServerProtocol]], Unit, Unit] =
+    ): Sess[
+      Cap[Tag, SCtx[Dual[ServerProtocol]], Dual[ServerProtocol]] *: Ctx,
+      Ctx,
+      Unit
+    ] =
       lift(IO.readLine).flatMapI {
         case "q" =>
-          sel2 >>> send(s"$i lines sent") >>> zero >>> sel1 >>> close
+          sel2(c) >>> send(c, s"$i lines sent") >>> zero(c) >>> sel1(
+            c
+          ) >>> close(c)
         case s =>
-          sel2 >>> send(s) >>> zero >>> loop(i + 1)
+          sel2(c) >>> send(c, s) >>> zero(c) >>> loop(i + 1)
       }
 
-    enter >>> loop(0)
+    enter(c) >>> loop(0)
   }
 }
 
@@ -46,10 +65,20 @@ object Main extends IOApp {
 
   override def run(args: List[String]): IO[ExitCode] = for {
     rv <- Rendezvous.apply[IO, Rec[Server.ServerProtocol]]
-    f1 <- rv.accept(Server.server).start
-    f2 <- rv.request(Server.client).start
-    _ <- f1.join
-    _ <- f2.join
+    f1 <- rv
+      .accept(
+        [Tag] => (c: Channel[IO, Tag]) => Server.server[Tag, EmptyTuple](c)
+      )
+      .run
+      .start
+    f2 <- rv
+      .request(
+        [Tag] => (c: Channel[IO, Tag]) => Server.client[Tag, EmptyTuple](c)
+      )
+      .run
+      .start
+    _ <- f1.join.flatMap(IO.println)
+    _ <- f2.join.flatMap(IO.println)
   } yield ExitCode.Success
 
 }

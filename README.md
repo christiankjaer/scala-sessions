@@ -12,13 +12,13 @@ type PingPong = Int :!: Int :?: Eps
 
 One party can implement one side of the protocol
 ```scala
-val party1: Sess[Cap[ECtx, PingPong], Unit, Unit] =
-    send(42) >>> recv >>> close
+val party1: Sess[Cap[ECtx, PingPong], Closed, Int] =
+    send(42) >>> recv.flatMapI(n => close >>> lift(IO.pure(n)))
 ```
 
 And the other can implement the dual protocol that will echo back the received number.
 ```scala
-val party2: Sess[Cap[ECtx, Dual[PingPong]], Unit, Unit] =
+val party2: Sess[Cap[ECtx, Dual[PingPong]], Closed, Unit] =
     recv.flatMapI(send(_) >>> close)
 ```
 
@@ -30,7 +30,7 @@ object Main extends IOApp {
   given ChannelGen[IO] = QueueChan.queueChanGen
 
   override def run(args: List[String]): IO[ExitCode] = for {
-    rv <- Rendezvous.apply[IO, PingPont]
+    rv <- Rendezvous.apply[IO, PingPong]
     f1 <- rv.accept(party1).start
     f2 <- rv.request(party2).start
     _ <- f1.join
